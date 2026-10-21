@@ -1,247 +1,276 @@
 // src/contexts/WishlistContext.tsx
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+//
+// Wishlist state. Anonymous users get a localStorage-backed list; signed-in
+// users get the `wishlists` table, with the local list merged upwards on login.
+//
+// Consumers always see a normalised `Product[]` — the previous version leaked
+// raw rows (and their `product_json` string/object ambiguity) into the pages,
+// which is why WishlistPage needed its own extraction logic.
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useAuth } from './AuthContext';
-import type { Product } from '../lib/supabase';
+import { useToast } from './ToastContext';
+import {
+  addWishlistItem,
+  AppError,
+  clearWishlistForUser,
+  fetchProductsByIds,
+  fetchWishlist,
+  removeWishlistItem,
+  type Product,
+  type WishlistRow,
+} from '../lib/supabase';
 
-type WishlistRow = {
-  id?: string;
-  user_id?: string | null;
-  product_id?: string;
-  product_json?: any;
-  created_at?: string;
-};
-
-type WishlistContextValue = {
-  items: Array<Product | WishlistRow>;
+export type WishlistContextValue = {
+  /** Normalised products, newest first. */
+  items: Product[];
+  count: number;
+  loading: boolean;
   isInWishlist: (productId?: string | null) => boolean;
   toggleWishlist: (product: Product) => Promise<void>;
   addToWishlist: (product: Product) => Promise<void>;
   removeFromWishlist: (productId: string) => Promise<void>;
-  loading: boolean;
+  clearWishlist: () => Promise<void>;
 };
+
+const STORAGE_KEY = 'skinfinity_wishlist_v2';
+const LEGACY_KEY = 'skin_wishlist';
 
 const WishlistContext = createContext<WishlistContextValue | undefined>(undefined);
 
-export const useWishlist = (): WishlistContextValue => {
+export function useWishlist(): WishlistContextValue {
   const ctx = useContext(WishlistContext);
   if (!ctx) throw new Error('useWishlist must be used within WishlistProvider');
   return ctx;
-};
+}
 
-export function WishlistProvider({ children }: { children: React.ReactNode }) {
+function isProduct(value: unknown): value is Product {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<Product>;
+  return typeof candidate.id === 'string' && typeof candidate.name === 'string';
+}
+
+/** `product_json` may be stored as an object or as a JSON string. */
+function parseSnapshot(raw: WishlistRow['product_json']): Product | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return isProduct(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return isProduct(raw) ? raw : null;
+}
+
+function readLocal(): Product[] {
+  if (typeof window === 'undefined') return [];
+  for (const key of [STORAGE_KEY, LEGACY_KEY]) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      const products = parsed.filter(isProduct);
+      if (products.length > 0 || key === STORAGE_KEY) return products;
+    } catch {
+      // try the next key
+    }
+  }
+  return [];
+}
+
+function writeLocal(products: Product[]) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+  } catch {
+    // ignore quota/private-browsing failures
+  }
+}
+
+export function WishlistProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const [items, setItems] = useState<Array<Product | WishlistRow>>([]);
-  const [loading, setLoading] = useState(false);
-  const LOCAL_KEY = 'skin_wishlist';
+  const { toast } = useToast();
+  const userId = user?.id ?? null;
 
-  const emit = useCallback((action: 'add' | 'remove', payload: any) => {
+  const [items, setItems] = useState<Product[]>(() => readLocal());
+  const [loading, setLoading] = useState(true);
+
+  const itemsRef = useRef<Product[]>(items);
+  itemsRef.current = items;
+  const userIdRef = useRef<string | null>(userId);
+  userIdRef.current = userId;
+
+  const commit = useCallback((next: Product[]) => {
+    itemsRef.current = next;
+    setItems(next);
+    if (!userIdRef.current) writeLocal(next);
+  }, []);
+
+  /** Fill in products we only have an id for (rows saved without a snapshot). */
+  const resolveMissing = useCallback(async (rows: WishlistRow[]) => {
+    const missing = rows.filter((row) => !parseSnapshot(row.product_json)).map((row) => row.product_id);
+    if (missing.length === 0) return new Map<string, Product>();
     try {
-      window.dispatchEvent(new CustomEvent('wishlist:changed', { detail: { action, payload } }));
+      const products = await fetchProductsByIds(missing.filter(Boolean));
+      return new Map(products.map((p) => [p.id, p]));
     } catch {
-      /* noop */
+      return new Map<string, Product>();
     }
   }, []);
 
-  const loadLocal = useCallback(() => {
+  /* -------------------------------- loading ------------------------------- */
+
+  const load = useCallback(async () => {
+    if (!userId) {
+      commit(readLocal());
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     try {
-      const raw = localStorage.getItem(LOCAL_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }, []);
-
-  const saveLocal = useCallback((arr: any[]) => {
-    try {
-      localStorage.setItem(LOCAL_KEY, JSON.stringify(arr));
-    } catch (e) {
-      console.warn('wishlist saveLocal failed', e);
-    }
-  }, []);
-
-  // Load wishlist (server for logged-in; local for anonymous)
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      setLoading(true);
-      try {
-        if (!user) {
-          const local = loadLocal();
-          if (mounted) setItems(local);
-          return;
+      // Merge anything saved while signed out, then read the server list.
+      const local = readLocal();
+      for (const product of local) {
+        try {
+          await addWishlistItem(userId, product);
+        } catch {
+          // Skip rows the server rejects; the server list below wins.
         }
-
-        const { data, error } = await supabase
-          .from('wishlists')
-          .select('id, product_id, product_json, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-
-        if (error) {
-          console.error('Wishlist load error', error);
-          if (mounted) setItems([]);
-        } else {
-          if (mounted) setItems(data || []);
-        }
-      } catch (e) {
-        console.error('Wishlist load unexpected error', e);
-        if (mounted) setItems([]);
-      } finally {
-        if (mounted) setLoading(false);
       }
-    };
 
-    load();
-    return () => {
-      mounted = false;
-    };
-  }, [user, loadLocal]);
+      const rows = await fetchWishlist(userId);
+      const resolved = await resolveMissing(rows);
+
+      const products: Product[] = [];
+      const seen = new Set<string>();
+      for (const row of rows) {
+        const product = parseSnapshot(row.product_json) ?? resolved.get(row.product_id);
+        if (!product || seen.has(product.id)) continue;
+        seen.add(product.id);
+        products.push(product);
+      }
+
+      commit(products);
+      // The local list now lives on the server; stop mirroring it locally.
+      try {
+        window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.removeItem(LEGACY_KEY);
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      if (!(err instanceof AppError && err.code === 'NOT_CONFIGURED')) {
+        toast(err instanceof Error ? err.message : 'Could not load your wishlist.', 'error');
+      }
+      commit([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [commit, resolveMissing, toast, userId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  /* ------------------------------ mutations ------------------------------- */
 
   const isInWishlist = useCallback(
-    (productId?: string | null) => {
-      if (!productId) return false;
-      return items.some((it) => {
-        if (!it) return false;
-        // product object
-        // @ts-ignore
-        if (it.id && it.name) return it.id === productId;
-        const r = it as WishlistRow;
-        if (r.product_id) return r.product_id === productId;
-        if (r.product_json) {
-          const pj = typeof r.product_json === 'string' ? (() => { try { return JSON.parse(r.product_json); } catch { return null; } })() : r.product_json;
-          return pj?.id === productId;
-        }
-        return false;
-      });
-    },
+    (productId?: string | null) => Boolean(productId) && items.some((item) => item.id === productId),
     [items]
   );
 
   const addToWishlist = useCallback(
     async (product: Product) => {
       if (!product?.id) return;
-      // optimistic local update
-      setItems((prev) => {
-        if (prev.some((it) => {
-          // @ts-ignore
-          if (it.id && it.name) return it.id === product.id;
-          const r = it as WishlistRow;
-          if (r.product_id) return r.product_id === product.id;
-          if (r.product_json) {
-            const pj = typeof r.product_json === 'string' ? (() => { try { return JSON.parse(r.product_json); } catch { return null; } })() : r.product_json;
-            return pj?.id === product.id;
-          }
-          return false;
-        })) return prev;
-        return [{ ...product }, ...prev];
-      });
+      if (itemsRef.current.some((item) => item.id === product.id)) return;
 
-      emit('add', product);
+      // Optimistic, rolled back if the server write fails.
+      commit([product, ...itemsRef.current]);
 
-      if (!user) {
-        const cur = loadLocal();
-        if (!cur.some((p) => p.id === product.id)) {
-          saveLocal([product, ...cur]);
-        }
-        return;
-      }
+      if (!userIdRef.current) return;
 
       try {
-        const payload = { user_id: user.id, product_id: product.id, product_json: product };
-        const { data, error } = await supabase.from('wishlists').insert([payload]).select().single();
-        if (error) {
-          console.error('wishlist insert error', error);
-          // rollback optimistic
-          setItems((prev) => prev.filter((it) => {
-            // @ts-ignore
-            if (it.id && it.name) return it.id !== product.id;
-            const r = it as WishlistRow;
-            if (r.product_id) return r.product_id !== product.id;
-            if (r.product_json) {
-              const pj = typeof r.product_json === 'string' ? (() => { try { return JSON.parse(r.product_json); } catch { return null; } })() : r.product_json;
-              return pj?.id !== product.id;
-            }
-            return true;
-          }));
-        } else {
-          // replace optimistic product with server row (includes id)
-          setItems((prev) => {
-            const filtered = prev.filter((it) => {
-              // @ts-ignore
-              if (it.id && it.name) return it.id !== product.id;
-              const r = it as WishlistRow;
-              if (r.product_id) return r.product_id !== product.id;
-              if (r.product_json) {
-                const pj = typeof r.product_json === 'string' ? (() => { try { return JSON.parse(r.product_json); } catch { return null; } })() : r.product_json;
-                return pj?.id !== product.id;
-              }
-              return true;
-            });
-            return [data as WishlistRow, ...filtered];
-          });
-        }
-      } catch (e) {
-        console.error('addToWishlist unexpected error', e);
+        await addWishlistItem(userIdRef.current, product);
+      } catch (err) {
+        commit(itemsRef.current.filter((item) => item.id !== product.id));
+        toast(err instanceof Error ? err.message : 'Could not save to your wishlist.', 'error');
       }
     },
-    [user, emit, loadLocal, saveLocal]
+    [commit, toast]
   );
 
   const removeFromWishlist = useCallback(
     async (productId: string) => {
       if (!productId) return;
-      setItems((prev) =>
-        prev.filter((it) => {
-          // @ts-ignore
-          if (it.id && it.name) return it.id !== productId;
-          const r = it as WishlistRow;
-          if (r.product_id) return r.product_id !== productId;
-          if (r.product_json) {
-            const pj = typeof r.product_json === 'string' ? (() => { try { return JSON.parse(r.product_json); } catch { return null; } })() : r.product_json;
-            return pj?.id !== productId;
-          }
-          return true;
-        })
-      );
+      const previous = itemsRef.current;
+      if (!previous.some((item) => item.id === productId)) return;
 
-      emit('remove', { product_id: productId });
+      commit(previous.filter((item) => item.id !== productId));
 
-      if (!user) {
-        const cur = loadLocal();
-        saveLocal(cur.filter((p) => p.id !== productId));
-        return;
-      }
+      if (!userIdRef.current) return;
 
       try {
-        const { error } = await supabase.from('wishlists').delete().match({ user_id: user.id, product_id: productId });
-        if (error) {
-          console.error('wishlist delete error', error);
-          // reload to resync
-          const { data } = await supabase.from('wishlists').select('id, product_id, product_json, created_at').eq('user_id', user.id);
-          setItems(data || []);
-        }
-      } catch (e) {
-        console.error('removeFromWishlist unexpected error', e);
+        await removeWishlistItem(userIdRef.current, productId);
+      } catch (err) {
+        commit(previous);
+        toast(err instanceof Error ? err.message : 'Could not remove that item.', 'error');
       }
     },
-    [user, emit, loadLocal, saveLocal]
+    [commit, toast]
   );
 
   const toggleWishlist = useCallback(
     async (product: Product) => {
       if (!product?.id) return;
-      if (isInWishlist(product.id)) await removeFromWishlist(product.id);
-      else await addToWishlist(product);
+      if (itemsRef.current.some((item) => item.id === product.id)) {
+        await removeFromWishlist(product.id);
+      } else {
+        await addToWishlist(product);
+      }
     },
-    [addToWishlist, removeFromWishlist, isInWishlist]
+    [addToWishlist, removeFromWishlist]
   );
 
-  return (
-    <WishlistContext.Provider value={{ items, isInWishlist, toggleWishlist, addToWishlist, removeFromWishlist, loading }}>
-      {children}
-    </WishlistContext.Provider>
+  const clearWishlist = useCallback(async () => {
+    const previous = itemsRef.current;
+    if (previous.length === 0) return;
+
+    commit([]);
+
+    if (!userIdRef.current) return;
+
+    try {
+      await clearWishlistForUser(userIdRef.current);
+    } catch (err) {
+      commit(previous);
+      toast(err instanceof Error ? err.message : 'Could not clear your wishlist.', 'error');
+    }
+  }, [commit, toast]);
+
+  const value = useMemo<WishlistContextValue>(
+    () => ({
+      items,
+      count: items.length,
+      loading,
+      isInWishlist,
+      toggleWishlist,
+      addToWishlist,
+      removeFromWishlist,
+      clearWishlist,
+    }),
+    [addToWishlist, clearWishlist, isInWishlist, items, loading, removeFromWishlist, toggleWishlist]
   );
+
+  return <WishlistContext.Provider value={value}>{children}</WishlistContext.Provider>;
 }

@@ -1,591 +1,347 @@
 // src/pages/HomePage.tsx
-import { Sparkles, Heart } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { supabase, Product, Category } from '../lib/supabase';
-import { useCart } from '../contexts/CartContext';
-import { useWishlist } from '../contexts/WishlistContext';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ArrowRight, Leaf, ShieldCheck, Sparkles, Truck, Undo2 } from 'lucide-react';
+import ProductCard, { ProductGrid } from '../components/ProductCard';
+import { Button, Spinner } from '../components/ui';
+import { useCatalog } from '../hooks/useCatalog';
+import { useNavigate } from '../hooks/useRoute';
+import {
+  CATEGORY_PLACEHOLDER,
+  CONCERN_PLACEHOLDER,
+  HERO_IMAGE,
+  categoryImage,
+  concernImage,
+  fallbackTo,
+} from '../lib/images';
+import { dedupeKey } from '../lib/format';
+import {
+  fetchFeaturedProducts,
+  fetchNewArrivals,
+  isSupabaseConfigured,
+  type Product,
+} from '../lib/supabase';
 
-type HomePageProps = {
-  onNavigate: (page: string) => void;
-};
+const TRUST_POINTS = [
+  { icon: ShieldCheck, title: '100% authentic', copy: 'Sourced direct from Korean brands' },
+  { icon: Truck, title: 'Free shipping', copy: 'On orders over ₹1,499 across India' },
+  { icon: Leaf, title: 'Conscious picks', copy: 'Cruelty-free and dermatologist tested' },
+  { icon: Undo2, title: 'Easy returns', copy: '7-day no-questions returns' },
+];
 
-const CATEGORY_IMAGES: Record<string, string> = {
-  new: '/assets/categories/new.jpeg',
-  cleanser: '/assets/categories/cleanser.jpeg',
-  toner: '/assets/categories/toner.jpeg',
-  'ampoule-serum': '/assets/categories/ampoule-serum.jpeg',
-  moisturizer: '/assets/categories/moisturizer.jpeg',
-  'mask-treatment': '/assets/categories/mask-treatment.jpeg',
-  sunscreen: '/assets/categories/sunscreen.webp',
-  lipcare: '/assets/categories/lipcare.jpeg',
-  sets: '/assets/categories/sets.webp',
-  merchandise: '/assets/categories/merchandise.webp',
-  default: '/assets/categories/default.jpg',
-};
+export default function HomePage() {
+  const navigate = useNavigate();
+  const { categories, concerns, loading: catalogLoading } = useCatalog();
 
-const normalizeSlug = (s?: string | null) =>
-  (s ?? '').toString().trim().toLowerCase().replace(/\s+/g, '-');
-
-const dedupeKey = (s?: string | null) =>
-  (s ?? '').toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-
-export default function HomePage({ onNavigate }: HomePageProps) {
-  const [newProducts, setNewProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const { addItem, removeItem, cartItems } = useCart();
-  const { toggleWishlist, isInWishlist } = useWishlist();
-
-  // NEW: control whether to show all new products
-  const [showAllNew, setShowAllNew] = useState(false);
-
-  // newsletter state for footer
-  const [newsletterEmail, setNewsletterEmail] = useState('');
-  const [subscribed, setSubscribed] = useState(false);
+  const [newArrivals, setNewArrivals] = useState<Product[]>([]);
+  const [featured, setFeatured] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchNewProducts();
-    fetchCategories();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let active = true;
+
+    async function load() {
+      // No early return for a missing Supabase config: the data layer serves the
+      // bundled demo catalogue in that case, so the page still has products.
+      setLoading(true);
+      try {
+        const [fresh, popular] = await Promise.all([fetchNewArrivals(12), fetchFeaturedProducts(8)]);
+        if (!active) return;
+        setNewArrivals(fresh);
+        // Avoid repeating the same products in both rails.
+        const seen = new Set(fresh.map((p) => p.id));
+        setFeatured(popular.filter((p) => !seen.has(p.id)));
+        setError(null);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : 'Could not load products.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void load();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  async function fetchNewProducts() {
-    try {
-      const { data } = await supabase
-        .from('products')
-        .select('*')
-        .eq('is_new', true)
-        .order('created_at', { ascending: false })
-        .limit(100);
-      if (data) setNewProducts(data);
-    } catch (e) {
-      console.error('fetchNewProducts error', e);
-    }
-  }
-
-  async function fetchCategories() {
-    try {
-      const { data } = await supabase
-        .from('categories')
-        .select('*')
-        .order('display_order', { ascending: true })
-        .limit(20);
-      if (data) setCategories(data);
-    } catch (e) {
-      console.error('fetchCategories error', e);
-    }
-  }
-
-  const getProductImage = (product: Product) => {
-    if ((product as any).image_url) return (product as any).image_url;
-    return `/assets/new/${product.id}.jpg`;
-  };
-
-  const REQUIRED_CATEGORIES: Category[] = [
-    { id: 'sunscreen', name: 'Sunscreen', slug: 'sunscreen' } as Category,
-    { id: 'lipcare', name: 'Lip Care', slug: 'lipcare' } as Category,
-    { id: 'sets', name: 'Sets', slug: 'sets' } as Category,
-    { id: 'merchandise', name: 'Merchandise', slug: 'merchandise' } as Category,
-  ];
-
-  const displayedCategories = useMemo(() => {
-    const map = new Map<string, Category>();
-    for (const c of categories) {
-      if (!c) continue;
-      const key = dedupeKey(c.slug ?? c.name);
-      map.set(key, c);
-    }
-    for (const rc of REQUIRED_CATEGORIES) {
-      const key = dedupeKey(rc.slug ?? rc.name);
-      if (!map.has(key)) map.set(key, { ...rc, slug: rc.slug } as Category);
-    }
-    return Array.from(map.values());
-  }, [categories]);
-
-  const inr = useMemo(
-    () =>
-      new Intl.NumberFormat('en-IN', {
-        style: 'currency',
-        currency: 'INR',
-        maximumFractionDigits: 0,
-      }),
-    []
-  );
-
-  // Safe price formatter to avoid passing undefined to Intl.NumberFormat.format
-  const formatPrice = (p?: number | string | null) =>
-    p != null && p !== '' && !Number.isNaN(Number(p)) ? inr.format(Number(p)) : '—';
-
-  // Helper: produce variants for a given concern/category slug
-  const makeVariants = (basePath: string, slug: string) => {
-    const clean = slug.toString().trim().toLowerCase().replace(/\s+/g, '-');
-    return [
-      `${basePath}/${clean}.jpeg`,
-      `${basePath}/${clean}.jpg`,
-      `${basePath}/${clean}.webp`,
-      `${basePath}/${clean.replace(/-/g, '')}.jpeg`,
-      `${basePath}/${clean.replace(/-/g, '')}.jpg`,
-      `${basePath}/${clean.replace(/-/g, '')}.webp`,
-    ];
-  };
-
-  // Generic onError handler that cycles through src variants stored in data-variants
-  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    const el = e.currentTarget;
-    try {
-      const variantsRaw = el.dataset.variants;
-      if (!variantsRaw) {
-        el.src = el.dataset.fallback ?? '/assets/concerns/default.jpg';
-        return;
-      }
-      const variants: string[] = JSON.parse(variantsRaw);
-      const tried = Number(el.dataset.tried || '0');
-      const nextIndex = tried + 1;
-      if (nextIndex < variants.length) {
-        el.dataset.tried = String(nextIndex);
-        el.src = variants[nextIndex];
-      } else {
-        // exhausted variants -> fallback
-        el.src = el.dataset.fallback ?? '/assets/concerns/default.jpg';
-      }
-    } catch (err) {
-      el.src = el.dataset.fallback ?? '/assets/concerns/default.jpg';
-    }
-  };
-
-  const handleNewsletterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Local only — integrate with your API or service as needed.
-    if (!newsletterEmail.trim()) return;
-    console.log('Subscribe request for', newsletterEmail);
-    setSubscribed(true);
-    setNewsletterEmail('');
-    setTimeout(() => setSubscribed(false), 3500); // visual feedback
-  };
-
-  // cart snapshot from CartContext (fallback safe-read)
-  const qtyFor = (p: Product) => cartItems[p.id] ?? 0;
+  const shopCategories = categories.filter((c) => dedupeKey(c.slug ?? c.name) !== 'new');
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      {/* HERO */}
-      <section className="relative">
-        <div className="relative h-[500px] md:h-[560px] w-full overflow-hidden">
-          <img
-            src="/assets/hero/glass.jpeg"
-            alt="Glass skin hero"
-            className="absolute inset-0 w-full h-full object-cover"
-            loading="lazy"
-          />
-          <div className="absolute inset-0 bg-black/28 backdrop-blur-sm" />
-          <div className="absolute inset-0 flex items-center">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-                <div className="text-white z-10 max-w-2xl py-12">
-                  <div className="inline-flex items-center space-x-2 bg-white/10 px-4 py-2 rounded-full shadow-sm mb-6">
-                    <Sparkles className="w-4 h-4 text-rose-200" />
-                    <span className="text-sm font-medium text-white/90">New Arrivals Available</span>
-                  </div>
+    <div className="flex flex-col">
+      {/* ---------------------------------------------------------- hero */}
+      <section className="relative isolate overflow-hidden">
+        <img
+          src={HERO_IMAGE}
+          alt=""
+          aria-hidden
+          className="absolute inset-0 -z-10 h-full w-full object-cover"
+          onError={fallbackTo('/assets/hero/glass-skin.webp')}
+        />
+        <div className="absolute inset-0 -z-10 bg-gradient-to-r from-black/70 via-black/45 to-black/20" />
 
-                  <h1 className="text-3xl sm:text-4xl md:text-5xl font-light mb-4 leading-tight">
-                    Discover the
-                    <span className="block font-normal bg-gradient-to-r from-rose-300 to-pink-300 bg-clip-text text-transparent">
-                      Secret to Glass Skin
-                    </span>
-                  </h1>
+        <div className="mx-auto flex min-h-[520px] max-w-7xl items-center px-4 py-20 sm:px-6 lg:px-8 md:min-h-[600px]">
+          <div className="max-w-xl text-white">
+            <span className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-1.5 text-xs font-medium text-white backdrop-blur">
+              <Sparkles className="h-4 w-4 text-rose-200" />
+              New K-beauty arrivals every week
+            </span>
 
-                  <p className="text-lg text-white/90 mb-6">
-                    Experience authentic Korean beauty with our curated collection of premium skincare.
-                  </p>
+            <h1 className="mt-6 text-4xl font-light leading-tight sm:text-5xl md:text-6xl">
+              Discover the secret to
+              <span className="mt-1 block bg-gradient-to-r from-rose-200 to-pink-100 bg-clip-text font-normal text-transparent">
+                glass skin
+              </span>
+            </h1>
 
-                  {/* Buttons removed as requested */}
-                </div>
+            <p className="mt-5 text-base leading-relaxed text-white/85 sm:text-lg">
+              Authentic Korean skincare, curated by concern and routine step. Find the formulas your
+              skin actually needs — no ten-step guesswork required.
+            </p>
 
-                {/* Optional hero product image or promo card */}
-                <div className="hidden md:block" />
-              </div>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Button size="lg" onClick={() => navigate('new')}>
+                Shop new arrivals <ArrowRight className="h-4 w-4" />
+              </Button>
+              <Button
+                size="lg"
+                variant="secondary"
+                className="border-white/40 bg-white/10 text-white backdrop-blur hover:bg-white/20"
+                onClick={() => {
+                  const first = concerns[0]?.slug ?? concerns[0]?.name;
+                  if (first) navigate(`concern-${first}`);
+                  else document.getElementById('concerns')?.scrollIntoView({ behavior: 'smooth' });
+                }}
+              >
+                Shop by concern
+              </Button>
             </div>
           </div>
         </div>
       </section>
 
-      {/* NEW ARRIVALS */}
-      {newProducts.length > 0 && (
-        <section className="py-8 bg-gray-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between mb-6">
+      {/* ------------------------------------------------------- trust bar */}
+      <section className="border-b border-gray-100 bg-white">
+        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-6 px-4 py-8 sm:px-6 lg:grid-cols-4 lg:px-8">
+          {TRUST_POINTS.map(({ icon: Icon, title, copy }) => (
+            <div key={title} className="flex items-start gap-3">
+              <span className="rounded-full bg-rose-50 p-2 text-rose-600">
+                <Icon className="h-5 w-5" />
+              </span>
               <div>
-                <h2 className="text-3xl md:text-4xl font-extrabold text-rose-600">New Arrivals</h2>
-                <p className="text-sm text-gray-600 mt-2">Discover the latest innovations in K-beauty</p>
-              </div>
-
-              {/* UPDATED: toggle view all inline instead of navigating away */}
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setShowAllNew((s) => !s)}
-                  className="text-sm font-medium text-rose-600"
-                  aria-expanded={showAllNew}
-                >
-                  {showAllNew ? 'Show less' : `View all (${newProducts.length})`}
-                </button>
-                <button
-                  onClick={() => onNavigate('new')}
-                  className="text-sm font-medium text-gray-500 hover:text-gray-700"
-                  title="Go to New arrivals page"
-                >
-                  Open new page
-                </button>
+                <p className="text-sm font-semibold text-gray-900">{title}</p>
+                <p className="text-xs text-gray-500">{copy}</p>
               </div>
             </div>
+          ))}
+        </div>
+      </section>
 
-            {/* show either first 4 (collapsed) or all (expanded) */}
-            <div
-              className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 transition-all ${
-                showAllNew ? 'duration-300' : ''
-              }`}
-            >
-              {(showAllNew ? newProducts : newProducts.slice(0, 4)).map((product) => {
-                const qty = qtyFor(product);
-                const outOfStock = product.stock_quantity === 0;
-                return (
-                  <div
-                    key={product.id}
-                    className="group bg-white rounded-2xl overflow-hidden shadow hover:shadow-xl transition-all transform hover:-translate-y-1 relative"
-                  >
-                    {qty > 0 && (
-                      <div className="absolute top-3 left-3 z-20 text-xs font-semibold px-2 py-0.5 rounded-full bg-white/80 text-rose-600">
-                        {qty}
-                      </div>
-                    )}
+      {/* --------------------------------------------------- new arrivals */}
+      <section className="bg-gray-50/70 py-14">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <SectionHeading
+            eyebrow="Just landed"
+            title="New arrivals"
+            copy="The latest innovations from Seoul, restocked weekly."
+            action={
+              newArrivals.length > 0 ? (
+                <Button variant="ghost" onClick={() => navigate('new')}>
+                  View all <ArrowRight className="h-4 w-4" />
+                </Button>
+              ) : undefined
+            }
+          />
 
-                    <div className="aspect-square bg-gray-100 relative overflow-hidden">
-                      {/* Wishlist heart button (CategoryPage style) */}
-                      <button
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          toggleWishlist(product);
-                        }}
-                        aria-pressed={isInWishlist(product.id)}
-                        aria-label={isInWishlist(product.id) ? 'Remove from wishlist' : 'Add to wishlist'}
-                        className={`absolute top-3 right-14 p-2 rounded-full shadow-sm transition-transform transform hover:scale-105 focus:outline-none ${
-                          isInWishlist(product.id) ? 'bg-white' : 'bg-white'
-                        }`}
-                        title={isInWishlist(product.id) ? 'Remove from wishlist' : 'Add to wishlist'}
-                      >
-                        <Heart className={`w-5 h-5 ${isInWishlist(product.id) ? 'text-rose-600' : 'text-gray-600'}`} />
-                      </button>
-
-                      <img
-                        src={getProductImage(product)}
-                        alt={product.name}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                      <div className="absolute top-3 left-3 text-xs px-3 py-1 rounded-full bg-rose-500 text-white">
-                        New
-                      </div>
-                      {outOfStock && (
-                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                          <span className="bg-white text-gray-900 px-3 py-1 rounded-full text-sm font-medium">
-                            Out of stock
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="p-4 md:p-6">
-                      <h3 className="font-medium text-gray-900 mb-1 line-clamp-2">{product.name}</h3>
-                      <p className="text-sm text-gray-600 mb-3 line-clamp-2">{product.short_description}</p>
-
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <span className="text-lg font-semibold text-gray-900">
-                            {formatPrice(product.price)}
-                          </span>
-                          {qty > 0 && <span className="text-sm text-gray-500">· {qty} in cart</span>}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {qty > 0 ? (
-                            <>
-                              <button
-                                onClick={() => removeItem(product, 1)}
-                                className="px-3 py-1.5 rounded-full text-sm font-medium bg-gray-100 hover:bg-gray-200 transition"
-                              >
-                                −
-                              </button>
-                              <div className="px-3 py-1.5 rounded-full text-sm font-semibold bg-white border">
-                                {qty}
-                              </div>
-                              <button
-                                onClick={() => addItem(product, 1)}
-                                disabled={outOfStock}
-                                className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${
-                                  outOfStock
-                                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                                    : 'bg-rose-600 text-white hover:bg-rose-700'
-                                }`}
-                              >
-                                +
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              onClick={() => addItem(product, 1)}
-                              disabled={outOfStock}
-                              className={`px-1 text-sm font-medium transition ${
-                                outOfStock
-                                  ? 'text-gray-400 cursor-not-allowed'
-                                  : 'text-rose-600 hover:text-rose-700'
-                              }`}
-                            >
-                              Add to Cart
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+          {loading ? (
+            <div className="flex justify-center py-16">
+              <Spinner label="Loading new arrivals" />
             </div>
+          ) : newArrivals.length === 0 ? (
+            <EmptyCatalogue error={error} />
+          ) : (
+            <ProductGrid>
+              {newArrivals.slice(0, 8).map((product) => (
+                <ProductCard key={product.id} product={product} />
+              ))}
+            </ProductGrid>
+          )}
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------ bestsellers */}
+      {featured.length > 0 && (
+        <section className="py-14">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <SectionHeading
+              eyebrow="Loved by our community"
+              title="Bestsellers"
+              copy="The routines our customers keep coming back to."
+            />
+            <ProductGrid>
+              {featured.map((product) => (
+                <ProductCard key={product.id} product={product} />
+              ))}
+            </ProductGrid>
           </div>
         </section>
       )}
 
-      {/* CATEGORIES */}
-      <section className="py-14">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-8">
-            <h2 className="text-3xl font-bold text-gray-900 mb-2">Shop by Category</h2>
-            <p className="text-gray-600">Find the perfect products for every step of your routine</p>
-          </div>
+      {/* ------------------------------------------------------ categories */}
+      <section className="bg-white py-14">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <SectionHeading
+            eyebrow="Build your routine"
+            title="Shop by category"
+            copy="Every step, from first cleanse to SPF."
+          />
 
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
-            {displayedCategories.map((category) => {
-              const slug = normalizeSlug(category.slug ?? category.name);
-              const bare = slug.replace(/-/g, '');
-              const imageSrc = CATEGORY_IMAGES[slug] ?? CATEGORY_IMAGES[bare] ?? CATEGORY_IMAGES.default;
-              const name = category.name ?? slug;
-
-              return (
-                <button
-                  key={category.id ?? slug}
-                  onClick={() => onNavigate(`category-${slug}`)}
-                  className="group aspect-square rounded-2xl overflow-hidden shadow hover:shadow-xl transition-all"
-                >
-                  <div className="relative h-full w-full">
-                    <img
-                      src={imageSrc}
-                      alt={name}
-                      className="absolute inset-0 w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = CATEGORY_IMAGES.default;
-                      }}
-                      loading="lazy"
-                    />
-                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
-                      <h3 className="text-sm font-medium text-white text-center px-2">{name}</h3>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          {catalogLoading ? (
+            <div className="flex justify-center py-12">
+              <Spinner label="Loading categories" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              {shopCategories.map((category) => {
+                const slug = category.slug ?? category.name;
+                return (
+                  <Tile
+                    key={category.id}
+                    label={category.name}
+                    image={categoryImage(slug)}
+                    fallback={CATEGORY_PLACEHOLDER}
+                    onClick={() => navigate(`category-${slug}`)}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       </section>
 
-      {/* CONCERNS */}
-      <section className="py-12 bg-neutral-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-8">
-            <h2 className="text-3xl font-bold text-gray-900 mb-2">Shop by Skin Concern</h2>
-            <p className="text-gray-600">Find targeted solutions for common skin concerns</p>
-          </div>
+      {/* ------------------------------------------------------- concerns */}
+      <section id="concerns" className="scroll-mt-24 bg-neutral-50 py-14">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <SectionHeading
+            eyebrow="Targeted care"
+            title="Shop by skin concern"
+            copy="Tell us what your skin is doing and we will match the formulas."
+          />
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-6">
-            {[
-              { slug: 'acne-breakout', name: 'Acne & Breakouts' },
-              { slug: 'pores', name: 'Pores' },
-              { slug: 'dullness-tone', name: 'Dullness & Tone' },
-              { slug: 'wrinkles', name: 'Wrinkles' },
-              { slug: 'sensitive', name: 'Sensitive Skin' },
-              { slug: 'dry-dehydrated', name: 'Dry & Dehydrated' },
-            ].map((concern) => {
-              const slug = normalizeSlug(concern.slug);
-              const variants = makeVariants('/assets/concerns', slug);
-              const first = variants[0];
-
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+            {concerns.map((concern) => {
+              const slug = concern.slug ?? concern.name;
               return (
-                <button
-                  key={concern.slug}
-                  onClick={() => onNavigate(`concern-${concern.slug}`)}
-                  className="group aspect-square rounded-2xl overflow-hidden shadow hover:shadow-xl transition-all"
-                >
-                  <div className="relative h-full w-full">
-                    <img
-                      src={first}
-                      alt={concern.name}
-                      className="absolute inset-0 w-full h-full object-cover"
-                      data-variants={JSON.stringify(variants)}
-                      data-tried="0"
-                      data-fallback="/assets/concerns/default.jpg"
-                      onError={handleImageError}
-                      loading="lazy"
-                    />
-                    <div className="absolute inset-0 bg-black/28 flex items-center justify-center">
-                      <h3 className="text-sm font-medium text-white text-center px-2">{concern.name}</h3>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* FOOTER */}
-      <footer className="mt-auto bg-gray-900 text-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-            {/* Brand + short */}
-            <div>
-              <button
-                onClick={() => onNavigate('home')}
-                className="text-white text-xl font-semibold mb-3 inline-block"
-                aria-label="Navigate to home"
-              >
-                Skinfinitys
-              </button>
-              <p className="text-sm text-gray-300">
-                Curated Korean skincare, conscious ingredients, and simple routines for healthy, glowing skin.
-              </p>
-              <div className="flex items-center gap-3 mt-4">
-                <button
-                  onClick={() => onNavigate('terms')}
-                  className="text-sm text-gray-400 hover:text-white transition"
-                >
-                  Terms
-                </button>
-                <button
-                  onClick={() => onNavigate('privacy')}
-                  className="text-sm text-gray-400 hover:text-white transition"
-                >
-                  Privacy
-                </button>
-              </div>
-            </div>
-
-            {/* Shop sections */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-100 mb-3">Shop</h4>
-              <ul className="space-y-2 text-sm text-gray-300">
-                <li>
-                  <button onClick={() => onNavigate('new')} className="hover:underline">
-                    New Arrivals
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => onNavigate('category-cleanser')} className="hover:underline">
-                    Cleansers
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => onNavigate('category-moisturizer')} className="hover:underline">
-                    Moisturizers
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => onNavigate('category-sunscreen')} className="hover:underline">
-                    Sunscreens
-                  </button>
-                </li>
-              </ul>
-            </div>
-
-            {/* Customer care */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-100 mb-3">Customer Care</h4>
-              <ul className="space-y-2 text-sm text-gray-300">
-                <li>
-                  <button onClick={() => onNavigate('help')} className="hover:underline">
-                    Help & FAQs
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => onNavigate('shipping')} className="hover:underline">
-                    Shipping
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => onNavigate('returns')} className="hover:underline">
-                    Returns
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => onNavigate('contact')} className="hover:underline">
-                    Contact Us
-                  </button>
-                </li>
-              </ul>
-            </div>
-
-            {/* Newsletter & Social */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-100 mb-3">Join our newsletter</h4>
-              <p className="text-sm text-gray-300 mb-3">Get 10% off your first order and updates on new drops.</p>
-
-              <form onSubmit={handleNewsletterSubmit} className="flex gap-2">
-                <label htmlFor="newsletter" className="sr-only">
-                  Email address
-                </label>
-                <input
-                  id="newsletter"
-                  type="email"
-                  value={newsletterEmail}
-                  onChange={(e) => setNewsletterEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full rounded-md px-3 py-2 text-gray-900 text-sm"
-                  required
+                <Tile
+                  key={concern.id}
+                  label={concern.name}
+                  image={concernImage(slug)}
+                  fallback={CONCERN_PLACEHOLDER}
+                  onClick={() => navigate(`concern-${slug}`)}
                 />
-                <button
-                  type="submit"
-                  className="inline-flex items-center px-3 py-2 rounded-md bg-rose-600 text-white text-sm font-medium hover:bg-rose-500 transition"
-                >
-                  Subscribe
-                </button>
-              </form>
-              {subscribed && <p className="mt-2 text-sm text-emerald-300">Subscribed — thank you!</p>}
-
-              <div className="mt-6">
-                <h5 className="text-sm font-semibold text-gray-100 mb-2">Follow us</h5>
-              </div>
-              <div className="flex items-center gap-3 mt-2">
-                <button onClick={() => window.open('https://instagram.com', '_blank')} aria-label="Instagram">
-                  <svg className="w-6 h-6 text-gray-300" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2.2c3.2 0 3.6 0 4.8.1 1.2.1 1.9.3 2.3.5.6.3 1 .7 1.5 1.3.5.6.9.9 1.3 1.5.2.4.4 1.1.5 2.3.1 1.2.1 1.6.1 4.8s0 3.6-.1 4.8c-.1 1.2-.3 1.9-.5 2.3-.3.6-.7 1-1.3 1.5-.6.5-.9.9-1.5 1.3-.4.2-1.1.4-2.3.5-1.2.1-1.6.1-4.8.1s-3.6 0-4.8-.1c-1.2-.1-1.9-.3-2.3-.5-.6-.3-1-.7-1.5-1.3-.5-.6-.9-.9-1.3-1.5-.2-.4-.4-1.1-.5-2.3C2.2 15.6 2.2 15.2 2.2 12s0-3.6.1-4.8c.1-1.2.3-1.9.5-2.3.3-.6.7-1 1.3-1.5.6-.5.9-.9 1.5-1.3.4-.2 1.1-.4 2.3-.5C8.4 2.2 8.8 2.2 12 2.2m0-2.2C8.7 0 8.3 0 7.1.1 5.9.2 4.9.4 4.1.7c-.9.4-1.7.9-2.6 1.8C.6 3.5.1 4.3-.3 5.2c-.3.8-.6 1.8-.7 3C-1.1 9.9-1.1 10.3-1.1 12s0 2.1.1 3.3c.1 1.2.4 2.2.7 3 .4.9.9 1.7 1.8 2.6.9.9 1.7 1.4 2.6 1.8.8.3 1.8.6 3 .7 1.2.1 1.6.1 3.3.1s2.1 0 3.3-.1c1.2-.1 2.2-.4 3-.7.9-.4 1.7-.9 2.6-1.8.9-.9 1.4-1.7 1.8-2.6.3-.8.6-1.8.7-3 .1-1.2.1-1.6.1-3.3s0-2.1-.1-3.3c-.1-1.2-.4-2.2-.7-3-.4-.9-.9-1.7-1.8-2.6C20.9.9 20.1.4 19.2.1c-.8-.3-1.8-.6-3-.7C14.1 0 13.7 0 12 0z" />
-                    <path d="M12 5.8A6.2 6.2 0 1 0 12 18.2 6.2 6.2 0 1 0 12 5.8zm0 10.2A4 4 0 1 1 12 7.8a4 4 0 0 1 0 8.2zM18.4 4.6a1.44 1.44 0 1 1-2.88 0 1.44 1.44 0 0 1 2.88 0z" />
-                  </svg>
-                </button>
-                <button onClick={() => window.open('https://facebook.com', '_blank')} aria-label="Facebook">
-                  <svg className="w-6 h-6 text-gray-300" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M22 12.07C22 6.49 17.52 2 12 2S2 6.49 2 12.07c0 4.98 3.66 9.11 8.44 9.93v-7.03H7.9v-2.9h2.54V9.41c0-2.5 1.49-3.88 3.77-3.88 1.09 0 2.23.2 2.23.2v2.46h-1.25c-1.23 0-1.61.77-1.61 1.56v1.87h2.75l-.44 2.9h-2.31V22C18.34 21.18 22 17.05 22 12.07z" />
-                  </svg>
-                </button>
-                <button onClick={() => window.open('mailto:hello@example.com')} aria-label="Email">
-                  <svg className="w-6 h-6 text-gray-300" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="border-t border-gray-800 mt-8 pt-6 text-sm text-gray-400 flex flex-col md:flex-row items-center justify-between">
-              <div>© {new Date().getFullYear()} Skinfinitys. All rights reserved.</div>
-              <div className="mt-3 md:mt-0">Made with ❤️ · Ships across India</div>
-            </div>
+              );
+            })}
           </div>
+
+          {!catalogLoading && concerns.length === 0 && (
+            <p className="py-8 text-center text-sm text-gray-500">
+              Skin concerns are unavailable right now. Please check back shortly.
+            </p>
+          )}
         </div>
-      </footer>
+      </section>
+
+      {/* ---------------------------------------------------------- quiz */}
+      <section className="bg-gradient-to-br from-rose-600 to-pink-600 py-16 text-white">
+        <div className="mx-auto flex max-w-7xl flex-col items-center gap-6 px-4 text-center sm:px-6 lg:flex-row lg:justify-between lg:text-left lg:px-8">
+          <div className="max-w-xl">
+            <h2 className="text-2xl font-light sm:text-3xl">Not sure where to start?</h2>
+            <p className="mt-2 text-sm text-white/85 sm:text-base">
+              Set your skin type in your profile and we will tailor recommendations, from barrier
+              repair to brightening.
+            </p>
+          </div>
+          <Button
+            size="lg"
+            variant="secondary"
+            className="border-transparent bg-white text-rose-700 hover:bg-rose-50"
+            onClick={() => navigate('profile')}
+          >
+            Set up my skin profile
+          </Button>
+        </div>
+      </section>
     </div>
   );
 }
+
+function SectionHeading({
+  eyebrow,
+  title,
+  copy,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  copy?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-widest text-rose-600">{eyebrow}</p>
+        <h2 className="mt-1 text-2xl font-bold text-gray-900 sm:text-3xl">{title}</h2>
+        {copy && <p className="mt-2 max-w-xl text-sm text-gray-600">{copy}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function Tile({
+  label,
+  image,
+  fallback,
+  onClick,
+}: {
+  label: string;
+  image: string;
+  fallback: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative aspect-square overflow-hidden rounded-2xl shadow-sm transition hover:shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+    >
+      <img
+        src={image}
+        alt={label}
+        loading="lazy"
+        onError={fallbackTo(fallback)}
+        className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+      />
+      <span className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
+      <span className="absolute inset-x-0 bottom-0 p-3 text-left text-sm font-medium text-white">
+        {label}
+      </span>
+    </button>
+  );
+}
+
+/** Shared empty/error state for catalogue-driven sections. */
+export function EmptyCatalogue({ error }: { error?: string | null }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-14 text-center">
+      <p className="text-base font-semibold text-gray-900">No products to show yet</p>
+      <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
+        {error ??
+          (isSupabaseConfigured
+            ? 'Seed the products table with the migration in supabase/migrations to populate the storefront.'
+            : 'Connect Supabase to load the catalogue. See the setup guide for the required environment variables.')}
+      </p>
+    </div>
+  );
+}
+

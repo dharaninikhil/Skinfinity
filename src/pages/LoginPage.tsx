@@ -1,263 +1,325 @@
-import React, { useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { Sparkles } from 'lucide-react';
+// src/pages/LoginPage.tsx
+import { useEffect, useState, type FormEvent } from 'react';
+import { ArrowLeft, Check, Mail, Sparkles } from 'lucide-react';
+import { Button } from '../components/ui';
+import { googleOAuthEnabled, useAuth, type SkinType } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import { useNavigate } from '../hooks/useRoute';
+import { fallbackTo, HERO_IMAGE } from '../lib/images';
+
+const SKIN_TYPES: Array<{ value: SkinType; label: string }> = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'oily', label: 'Oily' },
+  { value: 'dry', label: 'Dry' },
+  { value: 'combination', label: 'Combination' },
+  { value: 'sensitive', label: 'Sensitive' },
+  { value: 'other', label: 'Not sure yet' },
+];
+
+const PERKS = [
+  'Handpicked K-beauty formulas, verified authentic',
+  'Wishlist and cart synced across your devices',
+  'Free shipping on orders over ₹1,499',
+];
 
 type LoginPageProps = {
-  onNavigate: (page: string) => void;
+  /** Where to send the shopper after a successful sign-in. */
+  redirectTo?: string;
 };
 
-export default function LoginPage({ onNavigate }: LoginPageProps) {
-  const [isSignUp, setIsSignUp] = useState(false);
+export default function LoginPage({ redirectTo }: LoginPageProps) {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const { user, signIn, signUp, sendPasswordReset, signInWithGoogle } = useAuth();
+
+  const [mode, setMode] = useState<'signin' | 'signup' | 'reset'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [skinType, setSkinType] = useState<
-    'oily' | 'dry' | 'combination' | 'normal' | 'sensitive' | 'other'
-  >('normal');
+  const [skinType, setSkinType] = useState<SkinType>('normal');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn, signUp } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // A signed-in shopper has no business on this page.
+  useEffect(() => {
+    if (user) navigate(redirectTo ?? 'profile', { replace: true });
+  }, [navigate, redirectTo, user]);
+
+  const switchMode = (next: typeof mode) => {
+    setMode(next);
     setError('');
+    setNotice('');
+    setPassword('');
+  };
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setNotice('');
     setLoading(true);
 
     try {
-      if (isSignUp) {
-        await signUp(email, password, fullName, skinType);
-      } else {
-        await signIn(email, password);
+      if (mode === 'reset') {
+        await sendPasswordReset(email);
+        setNotice(`If an account exists for ${email}, a reset link is on its way.`);
+        setMode('signin');
+        return;
       }
-      onNavigate('home');
+
+      if (mode === 'signup') {
+        const result = await signUp(email, password, fullName, skinType);
+        if (result.needsEmailConfirmation) {
+          setNotice(`We sent a confirmation link to ${email}. Open it, then sign in here.`);
+          setMode('signin');
+          return;
+        }
+        toast('Welcome to Skinfinity!', 'success');
+        navigate(redirectTo ?? 'home', { replace: true });
+        return;
+      }
+
+      await signIn(email, password);
+      toast('Signed in.', 'success');
+      navigate(redirectTo ?? 'home', { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleGoogle = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google sign-in failed.');
+      setLoading(false);
+    }
+  };
+
+  const heading =
+    mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : 'Welcome back';
+  const subheading =
+    mode === 'signup'
+      ? 'Tell us your skin type and we will tailor the shelf to you.'
+      : mode === 'reset'
+        ? 'Enter your email and we will send you a reset link.'
+        : 'Sign in to sync your cart, wishlist and orders.';
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-rose-50 to-white flex items-center justify-center p-6">
-      <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
-        {/* Left - Visual / Promo */}
-        <div
-          className="hidden md:flex flex-col justify-center rounded-3xl p-10 bg-gradient-to-b from-rose-100 to-pink-50 shadow-2xl overflow-hidden relative"
-          aria-hidden="true"
-        >
-          <div className="absolute -left-10 -top-10 w-56 h-56 bg-rose-200 rounded-full opacity-20 blur-3xl" />
-          <div className="absolute -right-10 -bottom-10 w-72 h-72 bg-pink-200 rounded-full opacity-20 blur-3xl" />
+    <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-gradient-to-b from-rose-50 to-white p-4 sm:p-6">
+      <div className="grid w-full max-w-5xl items-stretch gap-8 md:grid-cols-2">
+        {/* Promo panel */}
+        <div className="relative hidden overflow-hidden rounded-3xl bg-gradient-to-b from-rose-100 to-pink-50 p-10 shadow-xl md:flex md:flex-col md:justify-center">
+          <div className="absolute -left-10 -top-10 h-56 w-56 rounded-full bg-rose-200 opacity-30 blur-3xl" />
+          <div className="absolute -bottom-10 -right-10 h-72 w-72 rounded-full bg-pink-200 opacity-30 blur-3xl" />
 
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-full bg-white/60 flex items-center justify-center">
-              <Sparkles className="w-6 h-6 text-rose-600" />
+          <div className="relative">
+            <div className="mb-6 flex items-center gap-3">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/70">
+                <Sparkles className="h-6 w-6 text-rose-600" />
+              </span>
+              <div>
+                <p className="text-2xl font-semibold text-rose-700">Skinfinity</p>
+                <p className="text-sm text-rose-600">K-beauty, curated for you</p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-2xl font-semibold text-rose-700">Skinfinity</h3>
-              <p className="text-sm text-rose-600">K-beauty curated for you</p>
+
+            <h2 className="text-3xl font-light text-gray-900">
+              {mode === 'signup' ? 'Start your glow journey' : 'Good to see you again'}
+            </h2>
+
+            <p className="mt-4 leading-relaxed text-gray-700">
+              Authentic Korean skincare favourites, personalised recommendations and routines that
+              actually fit your skin.
+            </p>
+
+            <ul className="mt-6 space-y-3 text-sm text-gray-700">
+              {PERKS.map((perk) => (
+                <li key={perk} className="flex items-start gap-3">
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" />
+                  {perk}
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-8 overflow-hidden rounded-2xl shadow-inner">
+              <img
+                src={HERO_IMAGE}
+                alt="Glass skin model"
+                loading="lazy"
+                onError={fallbackTo('/assets/hero/glass-skin.webp')}
+                className="h-40 w-full object-cover"
+              />
             </div>
-          </div>
-
-          <h2 className="text-3xl font-light text-gray-900 mb-4">
-            {isSignUp ? 'Start your glow journey' : 'Welcome back'}
-          </h2>
-
-          <p className="text-gray-700 mb-6 leading-relaxed">
-            Discover authentic Korean skincare favorites, personalized recommendations, and exclusive
-            bundles. Create an account to save your preferences and get tailored product picks.
-          </p>
-
-          <ul className="space-y-3 text-sm text-gray-700">
-            <li className="flex items-start gap-3">
-              <span className="mt-1 text-rose-500">•</span>
-              Handpicked K-beauty formulas
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="mt-1 text-rose-500">•</span>
-              Free shipping over $50
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="mt-1 text-rose-500">•</span>
-              Cruelty-free & certified
-            </li>
-          </ul>
-
-          <div className="mt-auto pt-6">
-            <img
-              src="/assets/hero/glass-skin.webp"
-              alt="Glass skin"
-              className="rounded-xl w-full shadow-inner object-cover"
-            />
           </div>
         </div>
 
-        {/* Right - Form */}
-        <div className="bg-white rounded-3xl shadow-xl p-8 md:p-10 flex flex-col justify-center">
+        {/* Form */}
+        <div className="flex flex-col justify-center rounded-3xl bg-white p-8 shadow-xl sm:p-10">
           <div className="mb-6 text-center">
-            <div className="mx-auto w-16 h-16 rounded-full bg-gradient-to-br from-rose-500 to-pink-500 flex items-center justify-center mb-4">
-              <Sparkles className="w-8 h-8 text-white" />
-            </div>
-
-            <h1 className="text-2xl font-semibold text-gray-900">
-              {isSignUp ? 'Create your account' : 'Sign in to your account'}
-            </h1>
-            <p className="text-sm text-gray-600 mt-1">
-              {isSignUp ? 'Join Skinfinity — personalized skincare awaits' : 'Nice to see you again'}
-            </p>
+            <span className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-rose-500 to-pink-500">
+              <Sparkles className="h-8 w-8 text-white" />
+            </span>
+            <h1 className="text-2xl font-semibold text-gray-900">{heading}</h1>
+            <p className="mt-1 text-sm text-gray-600">{subheading}</p>
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-md text-sm text-red-700">
+            <p className="mb-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700" role="alert">
               {error}
-            </div>
+            </p>
+          )}
+          {notice && (
+            <p className="mb-4 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800" role="status">
+              <Mail className="mt-0.5 h-4 w-4 shrink-0" />
+              {notice}
+            </p>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {isSignUp && (
+          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+            {mode === 'signup' && (
               <>
-                {/* Full name */}
                 <div>
-                  <label htmlFor="fullName" className="block text-xs font-medium text-gray-600 mb-2">
+                  <label htmlFor="fullName" className="mb-1.5 block text-xs font-medium text-gray-600">
                     Full name
                   </label>
                   <input
                     id="fullName"
                     type="text"
                     required
+                    autoComplete="name"
                     value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-lg border border-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-rose-200 transition"
+                    onChange={(event) => setFullName(event.target.value)}
                     placeholder="Jane Doe"
+                    className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm placeholder-gray-400 transition focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-200"
                   />
                 </div>
 
-                {/* Skin type */}
                 <div>
-                  <label htmlFor="skinType" className="block text-xs font-medium text-gray-600 mb-2">
-                    Skin type
-                  </label>
-                  <div className="relative">
-                    <select
-                      id="skinType"
-                      value={skinType}
-                      onChange={(e) =>
-                        setSkinType(
-                          e.target.value as 'oily' | 'dry' | 'combination' | 'normal' | 'sensitive' | 'other'
-                        )
-                      }
-                      className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-rose-200 transition bg-white appearance-none"
-                    >
-                      <option value="normal">Normal</option>
-                      <option value="oily">Oily</option>
-                      <option value="dry">Dry</option>
-                      <option value="combination">Combination</option>
-                      <option value="sensitive">Sensitive</option>
-                      <option value="other">Other</option>
-                    </select>
-
-                    {/* small chevron */}
-                    <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
-                      ▾
-                    </div>
+                  <span className="mb-1.5 block text-xs font-medium text-gray-600">Skin type</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {SKIN_TYPES.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setSkinType(option.value)}
+                        aria-pressed={skinType === option.value}
+                        className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
+                          skinType === option.value
+                            ? 'border-rose-400 bg-rose-50 text-rose-700'
+                            : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </>
             )}
 
-            {/* Email */}
             <div>
-              <label htmlFor="email" className="block text-xs font-medium text-gray-600 mb-2">
+              <label htmlFor="email" className="mb-1.5 block text-xs font-medium text-gray-600">
                 Email
               </label>
               <input
                 id="email"
                 type="email"
                 required
+                autoComplete="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-rose-200 transition"
+                onChange={(event) => setEmail(event.target.value)}
                 placeholder="you@example.com"
+                className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm placeholder-gray-400 transition focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-200"
               />
             </div>
 
-            {/* Password */}
-            <div>
-              <label htmlFor="password" className="block text-xs font-medium text-gray-600 mb-2">
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                minLength={6}
-                className="w-full px-4 py-3 rounded-lg border border-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-rose-200 transition"
-                placeholder="Enter your password"
-              />
-            </div>
+            {mode !== 'reset' && (
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label htmlFor="password" className="block text-xs font-medium text-gray-600">
+                    Password
+                  </label>
+                  {mode === 'signin' && (
+                    <button
+                      type="button"
+                      onClick={() => switchMode('reset')}
+                      className="text-xs font-medium text-rose-600 hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="password"
+                  type="password"
+                  required
+                  minLength={6}
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder={mode === 'signup' ? 'At least 6 characters' : 'Enter your password'}
+                  className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm placeholder-gray-400 transition focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-200"
+                />
+              </div>
+            )}
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 rounded-lg bg-rose-600 text-white font-medium hover:bg-rose-700 transition disabled:opacity-60"
-            >
-              {loading ? 'Please wait...' : isSignUp ? 'Create account' : 'Sign in'}
-            </button>
+            <Button type="submit" size="lg" className="w-full" disabled={loading}>
+              {loading
+                ? 'Please wait…'
+                : mode === 'signup'
+                  ? 'Create account'
+                  : mode === 'reset'
+                    ? 'Send reset link'
+                    : 'Sign in'}
+            </Button>
           </form>
 
-          {/* OR divider */}
-          <div className="flex items-center gap-3 my-4">
-            <span className="flex-1 h-px bg-gray-200" />
-            <span className="text-xs text-gray-400">or</span>
-            <span className="flex-1 h-px bg-gray-200" />
-          </div>
+          {googleOAuthEnabled && mode !== 'reset' && (
+            <>
+              <div className="my-4 flex items-center gap-3">
+                <span className="h-px flex-1 bg-gray-200" />
+                <span className="text-xs text-gray-400">or</span>
+                <span className="h-px flex-1 bg-gray-200" />
+              </div>
 
-          {/* alternative actions (social placeholders) */}
-          <div className="flex gap-3">
-            <button
-              className="flex-1 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 transition"
-              onClick={() => alert('Social login placeholder')}
-            >
-              Continue with Google
-            </button>
-            <button
-              className="hidden md:inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 transition"
-              onClick={() => alert('Social login placeholder')}
-            >
-              Continue with Apple
-            </button>
-          </div>
+              <Button variant="secondary" className="w-full" onClick={() => void handleGoogle()} disabled={loading}>
+                Continue with Google
+              </Button>
+            </>
+          )}
 
           <div className="mt-6 text-center text-sm text-gray-600">
-            {isSignUp ? (
+            {mode === 'signup' ? (
               <>
                 Already have an account?{' '}
-                <button
-                  className="text-rose-600 font-medium"
-                  onClick={() => {
-                    setIsSignUp(false);
-                    setError('');
-                  }}
-                >
+                <button type="button" className="font-medium text-rose-600 hover:underline" onClick={() => switchMode('signin')}>
                   Sign in
                 </button>
               </>
             ) : (
               <>
-                Don't have an account?{' '}
-                <button
-                  className="text-rose-600 font-medium"
-                  onClick={() => {
-                    setIsSignUp(true);
-                    setError('');
-                  }}
-                >
-                  Create one
+                New to Skinfinity?{' '}
+                <button type="button" className="font-medium text-rose-600 hover:underline" onClick={() => switchMode('signup')}>
+                  Create an account
                 </button>
               </>
             )}
           </div>
+
+          {redirectTo && redirectTo !== '/' && (
+            <button
+              type="button"
+              onClick={() => navigate(redirectTo)}
+              className="mt-6 inline-flex items-center justify-center gap-1.5 text-xs text-gray-500 hover:text-rose-600"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to where you were
+            </button>
+          )}
         </div>
       </div>
     </div>

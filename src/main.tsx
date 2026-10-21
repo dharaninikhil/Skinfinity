@@ -1,18 +1,24 @@
+// src/main.tsx
 import { StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
+import { ToastProvider } from './contexts/ToastContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { WishlistProvider } from './contexts/WishlistContext';
 import { CartProvider } from './contexts/CartContext';
 import App from './App';
 import './index.css';
 
-console.log('Starting app...');
-const root = document.getElementById('root');
-console.log('Root element:', root);
+// Provider order matters: toasts are consumed by auth, and auth is consumed by
+// the wishlist and cart providers (both sync to the server per user).
+const rootElement = document.getElementById('root');
 
-if (root) {
-  ReactDOM.createRoot(root).render(
-    <StrictMode>
+if (!rootElement) {
+  throw new Error('Root element #root not found — check index.html.');
+}
+
+ReactDOM.createRoot(rootElement).render(
+  <StrictMode>
+    <ToastProvider>
       <AuthProvider>
         <WishlistProvider>
           <CartProvider>
@@ -20,9 +26,6 @@ if (root) {
           </CartProvider>
         </WishlistProvider>
       </AuthProvider>
-    </StrictMode>
-  );
-  console.log('App rendered');
-} else {
-  console.error('Root element not found');
-}
+    </ToastProvider>
+  </StrictMode>
+);

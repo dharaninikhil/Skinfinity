@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="Product image unavailable">
+  <rect width="400" height="400" fill="#fdf2f4"/>
+  <g fill="none" stroke="#f0b6c2" stroke-width="6" stroke-linecap="round">
+    <path d="M168 118h64v22h-64z"/>
+    <path d="M156 140h88a16 16 0 0 1 16 16v110a16 16 0 0 1-16 16h-88a16 16 0 0 1-16-16V156a16 16 0 0 1 16-16z"/>
+  </g>
+  <circle cx="200" cy="205" r="26" fill="#f7d3da"/>
+  <text x="200" y="330" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="18" fill="#d98a9c">Skinfinity</text>
+</svg>

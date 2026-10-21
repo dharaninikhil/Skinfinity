@@ -8,6 +8,12 @@ Browse by category or skin concern, search the catalogue, read product detail pa
 
 ## Quick start
 
+**Requires Node 22 LTS or newer** (`.nvmrc` pins it — run `nvm use`). The jsdom
+render tests pull in `undici`, which needs `zlib.createZstdDecompress`; on Node
+20 the jsdom worker crashes with an opaque
+`Cannot read properties of undefined (reading 'bind')`. `npm test` fails fast
+with a readable message if the runtime is too old.
+
 ```bash
 npm install
 cp .env.example .env     # then paste in your Supabase URL + anon key
@@ -146,7 +152,8 @@ Only cash on delivery is wired up. To accept prepaid payments, add a provider an
 
 ## Testing
 
-`npm test` runs 82 Vitest tests:
+`npm test` runs 82 Vitest tests (a `pretest` guard first checks the Node
+runtime can load jsdom — see Quick start):
 
 - **Unit** — currency/slug/date formatting, slug-alias resolution, route parsing and token translation, order pricing and shipping thresholds, Indian address validation, stock and discount helpers.
 - **Data drift guard** — the generated demo catalogue is checked against the SQL seed migration: referential integrity, unique slugs, every category and concern populated, and the two sources kept in sync.
@@ -167,4 +174,6 @@ Only cash on delivery is wired up. To accept prepaid payments, add a provider an
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs `npm run check` (typecheck, lint, test, build) on every push and pull request, and verifies the production build actually contains the static assets.
+`.github/workflows/ci.yml` runs `npm run check` (typecheck, lint, test, build) on every push and pull request, and verifies the production build actually contains the static assets and that the generated demo catalogue is still in sync with the seed migration.
+
+The workflow installs Node from `.nvmrc` (`node-version-file`), so CI and local development cannot drift onto different runtimes. It also uploads `dist/` as a build artifact.

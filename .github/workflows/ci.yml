@@ -17,8 +17,16 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # .nvmrc is the single source of truth so CI and local dev cannot
+          # drift. The floor is set by jsdom -> undici, which reads
+          # zlib.createZstdDecompress at import time; on Node 20 that is
+          # undefined and the jsdom worker dies with an opaque
+          # "Cannot read properties of undefined (reading 'bind')".
+          node-version-file: .nvmrc
           cache: npm
+
+      - name: Report toolchain
+        run: node -v && npm -v
 
       - name: Install dependencies
         run: npm ci

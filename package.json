@@ -11,10 +11,15 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "pretest": "node scripts/check-node.mjs",
     "test": "vitest run",
+    "pretest:watch": "node scripts/check-node.mjs",
     "test:watch": "vitest",
     "gen:demo": "node scripts/generate-demo-data.mjs",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

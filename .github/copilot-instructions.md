@@ -20,6 +20,8 @@ npm run check           # typecheck + lint + test + build — run before committ
 | Build | `npm run build` (typechecks, then `vite build`) |
 | Regenerate demo catalogue | `npm run gen:demo` |
 
+**Node 22+ required** — `.nvmrc` pins it and CI reads it via `node-version-file`. See Gotchas.
+
 ## Big picture
 
 - React 18 + TypeScript + Vite + Tailwind. Entry: `src/main.tsx` → `src/App.tsx`.
@@ -89,6 +91,7 @@ Migrations are idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, `DROP POLI
 
 - `slugVariants()` (in `src/lib/format.ts`) tolerates slug drift between seed data and asset filenames (`sensitive-skin` vs `sensitive`, `lip-care` vs `lipcare`). Migration `20251116150000` normalises the database slugs; keep both in mind when adding a category or concern.
 - New categories/concerns need an entry in the image maps in `src/lib/images.ts`, plus a file in `public/assets/`.
+- **Node version is load-bearing.** jsdom → undici calls `zlib.createZstdDecompress` at import time; it does not exist before Node 22.22.2, so on Node 20 the jsdom worker dies with `TypeError: Cannot read properties of undefined (reading 'bind')` from inside `node_modules/undici` and Vitest reports it as an *unhandled* error (no test in `src/App.test.tsx` runs). npm only warns about `engines`, never fails — `scripts/check-node.mjs` runs as a `pretest`/`pretest:watch` hook and turns that into a readable message. Never "fix" the test file for this.
 - `vite.config.ts` holds the Vitest config (`environment: 'node'`); DOM tests opt into jsdom with a `// @vitest-environment jsdom` docblock. jsdom does not implement `window.scrollTo`, so `src/App.test.tsx` stubs it.
 - ESLint disables `react-refresh/only-export-components` for `src/contexts/**` — context modules intentionally export a provider alongside its hook.
 - Accessible names matter: the render tests query by role and accessible name, so keep `aria-label`s on icon-only buttons.

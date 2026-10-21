@@ -129,7 +129,8 @@ Fully implemented but never mounted, and its Checkout button was `{/* TODO: go t
 | M6 | Mobile hid cart and wishlist, leaving only a floating "Checkout" FAB that went nowhere | Mobile sheet with search, cart, wishlist, account, categories and concerns |
 | M7 | Icon-only buttons had no accessible names; wishlist heart had `isWished ? 'bg-white' : 'bg-white'` | `aria-label`s throughout (the render tests query by accessible name, so this is enforced); dead ternaries removed |
 | M8 | No `.env.example`; README was two lines; package named `vite-react-typescript-starter` | `.env.example` with guidance, full README, renamed package |
-| M9 | No CI | `.github/workflows/ci.yml` runs typecheck, lint, test, build, asserts built assets exist and that generated demo data is in sync |
+| M9 | No CI | `.github/workflows/ci.yml` runs typecheck, lint, test, build, asserts built assets exist and that generated demo data is in sync. Installs Node from `.nvmrc` (`node-version-file`) so CI and local cannot drift |
+| M13 | No declared runtime: the jsdom tests need Node >= 22.22.2 (`undici` reads `zlib.createZstdDecompress` at import), but nothing said so | `engines` in `package.json`, `.nvmrc`, and `scripts/check-node.mjs` wired in as a `pretest`/`pretest:watch` hook — an unsupported Node now fails with a readable message instead of a `TypeError: Cannot read properties of undefined (reading 'bind')` from inside `node_modules/undici` |
 | M10 | No tests | 82 tests (see below) |
 | M11 | `index.html` had a generic title and `og:image` pointing at `bolt.new` | Real title, description, OG/Twitter tags, theme colour, SVG favicon |
 | M12 | Hero had no call to action (comment: "Buttons removed as requested") | Two CTAs plus a trust bar, bestsellers rail and a skin-profile prompt |
@@ -147,7 +148,7 @@ npm run build       ✅  dist/ = 31 files including all 24 original assets
 
 - **Unit** — currency/slug/date formatting, `slugVariants` aliasing, route parsing and legacy-token translation, shipping thresholds, discount-against-shipping interaction, Indian address/phone/PIN validation, stock and discount helpers.
 - **Drift guard** — the generated demo catalogue is validated against the SQL seed: referential integrity, unique slugs, every shoppable category and every concern populated, and the two sources kept in sync.
-- **Render (jsdom)** — the app is mounted at real URLs to prove home, category, concern (including alias slugs), product detail, search-from-query, 404 and all six info pages render; and that add-to-cart, navbar badges, the cart drawer, checkout, stock clamping and the wishlist flow all behave.
+- **Render (jsdom)** — requires Node >= 22.22.2 (see M13). The app is mounted at real URLs to prove home, category, concern (including alias slugs), product detail, search-from-query, 404 and all six info pages render; and that add-to-cart, navbar badges, the cart drawer, checkout, stock clamping and the wishlist flow all behave.
 
 These tests earned their keep immediately: they caught `HomePage` bailing out of its data load in demo mode and a product-detail save button with no accessible name — both fixed.
 
